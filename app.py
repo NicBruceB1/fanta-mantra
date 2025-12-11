@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # --- 1. DATI MANTRA 2025/2026 ---
+# Nota: Rispecchiano le asimmetrie (es. 4-4-2 ha un lato E/W e l'altro solo E)
 SCHEMI_MANTRA = {
     "3-4-3": [["Por"], ["Dc"], ["Dc"], ["Dc", "B"], ["E"], ["M", "C"], ["C"], ["E"], ["W", "A"], ["Pc", "A"], ["W", "A"]],
     "3-4-1-2": [["Por"], ["Dc"], ["Dc"], ["Dc", "B"], ["E"], ["M", "C"], ["C"], ["E"], ["T"], ["Pc", "A"], ["Pc", "A"]],
@@ -16,9 +17,10 @@ SCHEMI_MANTRA = {
     "4-2-3-1": [["Por"], ["Dd"], ["Dc"], ["Dc"], ["Ds"], ["M"], ["M", "C"], ["W", "T"], ["T"], ["W", "A"], ["Pc", "A"]]
 }
 
-# --- 2. LOGICA DIAGNOSTICA AVANZATA ---
+# --- 2. LOGICA DIAGNOSTICA ESPERTA ---
 def verifica_formazione(giocatori_selezionati, schema_nome, slot_schema):
     if not giocatori_selezionati: return True
+    # Ordiniamo per numero ruoli (euristica base)
     giocatori_ordinati = sorted(giocatori_selezionati, key=lambda x: len(x['ruoli']))
     giocatore_corrente = giocatori_ordinati[0]
     ruoli_giocatore = set(giocatore_corrente['ruoli'])
@@ -34,36 +36,42 @@ def analizza_problemi(giocatori):
     problemi = []
     tot = len(giocatori)
     
-    # 1. Check Portieri (Severo)
+    # -- Conteggi Intelligenti --
     count_por = sum(1 for p in giocatori if 'Por' in p['ruoli'])
+    
+    # Punte e Attaccanti
+    pc_puri = sum(1 for p in giocatori if p['ruoli'] == ['Pc'])
+    pc_totali = sum(1 for p in giocatori if 'Pc' in p['ruoli'])
+    
+    # Esterni
+    # W_no_E: Giocatori che sono W (o W/A) ma NON possono fare la E
+    w_no_e = sum(1 for p in giocatori if 'W' in p['ruoli'] and 'E' not in p['ruoli'])
+    
+    # 1. Check Portieri
     if count_por > 1: problemi.append(f"⛔ **Troppi Portieri**: {count_por} selezionati. Ne serve 1.")
-    elif tot >= 11 and count_por == 0: problemi.append("⛔ **Manca il Portiere**: Hai 11 giocatori ma nessun Por.")
-
-    # 2. Check Punte Pc (Severo)
-    # Contiamo chi è SOLO Pc (molto vincolante)
-    solo_pc = sum(1 for p in giocatori if p['ruoli'] == ['Pc'])
-    # Contiamo chi HA il ruolo Pc (anche se ne ha altri)
-    tutti_pc = sum(1 for p in giocatori if 'Pc' in p['ruoli'])
     
-    if solo_pc > 2: problemi.append(f"⛔ **Troppi Pc puri**: Hai {solo_pc} giocatori che sono solo Pc. Massimo 2.")
-    if tutti_pc > 3: problemi.append(f"⚠️ **Affollamento Attacco**: Hai {tutti_pc} punte (Pc). È difficile farle coesistere tutte.")
-
-    # 3. Check Braccetti / Difesa
-    solo_b = sum(1 for p in giocatori if 'B' in p['ruoli'] and 'Dc' not in p['ruoli'])
-    if solo_b > 1: problemi.append(f"⛔ **Troppi 'B' puri**: {solo_b} selezionati. Nelle difese a 3 ne puoi schierare max 1.")
+    # 2. Check Punte (Pc)
+    if pc_puri > 2: problemi.append(f"⛔ **Troppi Pc puri**: Hai {pc_puri} giocatori solo Pc. Massimo 2.")
     
-    difensori_totali = sum(1 for p in giocatori if any(r in ['Dd','Ds','Dc','B'] for r in p['ruoli']))
-    if tot > 5 and difensori_totali == 0:
-        problemi.append("⚠️ **Mancano Difensori**: Hai selezionato molti giocatori ma 0 difensori.")
+    # 3. Check CONFLITTO W vs E (Il tuo caso specifico)
+    # Se hai 2 o più Pc, devi usare moduli a 2 punte (4-4-2, 3-5-2, ecc).
+    # Questi moduli richiedono almeno una E. Se tu hai 2 W che non sono E, non possono giocare.
+    if pc_totali >= 2 and w_no_e >= 2:
+        problemi.append("⛔ **Conflitto Fasce**: Hai selezionato 2 Punte (Pc) e 2 Ali (W) che non hanno il ruolo E. I moduli a due punte (es. 4-4-2) supportano una W da un lato, ma richiedono obbligatoriamente una **E** dall'altro. Non puoi mettere due W pure.")
 
-    # 4. Check Esterni/Ali (W/A/E)
-    esterni = sum(1 for p in giocatori if any(r in ['W','A','E'] for r in p['ruoli']))
-    if esterni > 4:
-        problemi.append("⚠️ **Troppi Esterni/Ali**: Molti moduli supportano max 2 o 4 esterni. Tu ne hai scelti tanti.")
+    # 4. Check Generico Esterni
+    esterni_tot = sum(1 for p in giocatori if any(r in ['W','A','E'] for r in p['ruoli']))
+    if esterni_tot > 4:
+        problemi.append("⚠️ **Troppi Esterni**: Hai troppi giocatori di fascia.")
 
-    # 5. ERRORE GENERICO (Ora scatta SEMPRE se non ci sono altri errori specifici)
+    # 5. Check Difesa (solo se rosa quasi completa)
+    difensori = sum(1 for p in giocatori if any(r in ['Dd','Ds','Dc','B'] for r in p['ruoli']))
+    if tot >= 9 and difensori < 3:
+        problemi.append("⛔ **Mancano Difensori**: Hai selezionato quasi una squadra intera ma meno di 3 difensori.")
+    
+    # 6. Fallback
     if not problemi:
-        problemi.append("❓ **Conflitto di Ruoli**: I giocatori selezionati non si incastrano insieme. Probabilmente hai troppi giocatori per lo stesso ruolo specifico (es. 2 Pc + troppe Ali) che si contendono gli stessi posti.")
+        problemi.append("❓ **Incastro impossibile**: Combinazione di ruoli non valida per nessuno schema. Controlla di non aver sovrapposto troppi giocatori nello stesso ruolo specifico.")
 
     return problemi
 
@@ -71,7 +79,6 @@ def analizza_problemi(giocatori):
 st.set_page_config(page_title="Mantra Helper", layout="centered")
 st.title("⚽ Mantra Helper")
 
-# Inizializza stato
 if 'rosa' not in st.session_state: st.session_state.rosa = []
 
 # BOX CARICAMENTO
@@ -98,7 +105,7 @@ with st.expander("📂 Gestione File Excel", expanded=not bool(st.session_state.
             st.error(f"Errore: {e}")
             
     if st.session_state.rosa:
-        if st.button("🗑️ Cancella Rosa attuale"):
+        if st.button("🗑️ Cancella Rosa"):
             st.session_state.rosa = []
             st.rerun()
 
@@ -131,8 +138,7 @@ if st.session_state.rosa:
                     with cols[i%3]: st.markdown(f"### 🛡️ {m}")
             else:
                 st.error("❌ Nessuna formazione valida.")
-                # Mostra sempre l'analisi, anche se parziale
-                st.markdown("#### 🕵️ Analisi:")
+                st.markdown("#### 🕵️ Analisi del problema:")
                 for msg in analizza_problemi(target): st.write(msg)
 
 elif not uploaded_file:
