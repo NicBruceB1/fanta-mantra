@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-# --- 1. DATI MANTRA 2025/2026 ---
+# --- 1. DEFINIZIONE DATI MANTRA 2025/2026 ---
 SCHEMI_MANTRA = {
     "3-4-3": [["Por"], ["Dc"], ["Dc"], ["Dc", "B"], ["E"], ["M", "C"], ["C"], ["E"], ["W", "A"], ["Pc", "A"], ["W", "A"]],
     "3-4-1-2": [["Por"], ["Dc"], ["Dc"], ["Dc", "B"], ["E"], ["M", "C"], ["C"], ["E"], ["T"], ["Pc", "A"], ["Pc", "A"]],
@@ -16,9 +16,10 @@ SCHEMI_MANTRA = {
     "4-2-3-1": [["Por"], ["Dd"], ["Dc"], ["Dc"], ["Ds"], ["M"], ["M", "C"], ["W", "T"], ["T"], ["W", "A"], ["Pc", "A"]]
 }
 
+# --- 2. LOGICA DIAGNOSTICA (Errore Parlante) ---
 def verifica_formazione(giocatori_selezionati, schema_nome, slot_schema):
     if not giocatori_selezionati: return True
-    # Ordina per chi ha meno ruoli (più difficile da piazzare)
+    # Ordina per chi ha meno ruoli (più rigidi)
     giocatori_ordinati = sorted(giocatori_selezionati, key=lambda x: len(x['ruoli']))
     giocatore_corrente = giocatori_ordinati[0]
     ruoli_giocatore = set(giocatore_corrente['ruoli'])
@@ -26,83 +27,90 @@ def verifica_formazione(giocatori_selezionati, schema_nome, slot_schema):
     
     for i, slot in enumerate(slot_schema):
         if any(r in slot for r in ruoli_giocatore):
-            # Ricorsione
             if verifica_formazione(altri_giocatori, schema_nome, slot_schema[:i] + slot_schema[i+1:]):
                 return True
     return False
 
-# --- INTERFACCIA ---
-st.set_page_config(page_title="Mantra Excel Pro", layout="centered")
-st.title("⚽ Mantra Pro: Carica Rosa")
-
-if 'rosa' not in st.session_state:
-    st.session_state.rosa = []
-
-# --- UPLOAD EXCEL ---
-with st.expander("📂 Carica file Excel (Ruolo - Calciatore)", expanded=True):
-    uploaded_file = st.file_uploader("Trascina qui il file Excel", type=["xlsx", "xls"])
+def analizza_problemi(giocatori):
+    problemi = []
     
-    if uploaded_file is not None:
+    # Check 1: Portieri
+    count_por = sum(1 for p in giocatori if 'Por' in p['ruoli'])
+    if count_por > 1: problemi.append(f"⛔ **Troppi Portieri**: Ne hai messi {count_por}. Ne serve 1.")
+    elif count_por == 0 and len(giocatori) > 10: problemi.append("⛔ **Manca il Portiere**.")
+
+    # Check 2: Difensori totali
+    difensori = sum(1 for p in giocatori if any(r in ['Dd', 'Ds', 'Dc', 'B'] for r in p['ruoli']))
+    if len(giocatori) >= 10 and difensori < 3:
+        problemi.append(f"⛔ **Pochi Difensori**: Hai solo {difensori} difensori. Minimo 3.")
+
+    # Check 3: Braccetti puri
+    solo_b = sum(1 for p in giocatori if 'B' in p['ruoli'] and 'Dc' not in p['ruoli'])
+    if solo_b > 1:
+        problemi.append(f"⚠️ **Troppi 'B' puri**: Hai {solo_b} giocatori solo 'B'. Massimo 1 nelle difese a 3.")
+
+    # Check 4: Punte
+    solo_pc = sum(1 for p in giocatori if p['ruoli'] == ['Pc'])
+    if solo_pc > 2:
+        problemi.append(f"⚠️ **Troppe Punte (Pc)**: Hai {solo_pc} giocatori solo Pc. Massimo 2.")
+
+    if not problemi and len(giocatori) == 11:
+        problemi.append("❓ **Conflitto generico**: Probabilmente hai troppi giocatori per lo stesso ruolo (es. troppi terzini o troppi mediani).")
+    
+    return problemi
+
+# --- 3. INTERFACCIA ---
+st.set_page_config(page_title="Mantra Mobile", layout="centered")
+st.title("⚽ Mantra Helper")
+
+if 'rosa' not in st.session_state: st.session_state.rosa = []
+
+# --- CARICAMENTO FILE ---
+with st.expander("📂 Carica Excel", expanded=not st.session_state.rosa):
+    uploaded_file = st.file_uploader("Seleziona file", type=["xlsx", "xls"])
+    if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
-            # Pulisce i nomi delle colonne
             df.columns = [str(c).strip().capitalize() for c in df.columns]
-            
             if "Ruolo" in df.columns and "Calciatore" in df.columns:
                 nuova_rosa = []
-                for index, row in df.iterrows():
+                for _, row in df.iterrows():
                     nome = str(row['Calciatore']).strip()
                     ruoli_raw = str(row['Ruolo'])
-                    # Gestione separatori (; o , o /)
-                    if ";" in ruoli_raw: ruoli = [r.strip() for r in ruoli_raw.split(';')]
-                    elif "," in ruoli_raw: ruoli = [r.strip() for r in ruoli_raw.split(',')]
-                    elif "/" in ruoli_raw: ruoli = [r.strip() for r in ruoli_raw.split('/')]
-                    else: ruoli = [ruoli_raw.strip()]
-                    
+                    for sep in [';', ',', '/']:
+                        if sep in ruoli_raw:
+                            ruoli_raw = ruoli_raw.replace(sep, ',')
+                    ruoli = [r.strip() for r in ruoli_raw.split(',')]
                     nuova_rosa.append({"nome": nome, "ruoli": ruoli})
-                
                 st.session_state.rosa = nuova_rosa
                 st.success(f"✅ Caricati {len(nuova_rosa)} giocatori!")
+                st.rerun()
             else:
-                st.error("⚠️ Il file Excel deve avere le colonne: 'Ruolo' e 'Calciatore'.")
+                st.error("Il file deve avere colonne: Ruolo, Calciatore")
         except Exception as e:
-            st.error(f"Errore lettura file: {e}")
+            st.error(f"Errore: {e}")
 
-# --- VISUALIZZAZIONE ---
 if st.session_state.rosa:
+    if st.button("🔄 Cambia File Excel"):
+        st.session_state.rosa = []
+        st.rerun()
+    
     st.divider()
-    # Tabella semplice
-    st.dataframe(
-        pd.DataFrame([{"Calciatore": p['nome'], "Ruoli": ", ".join(p['ruoli'])} for p in st.session_state.rosa]),
-        hide_index=True, use_container_width=True
-    )
+    nomi = sorted([p['nome'] for p in st.session_state.rosa])
+    scelte = st.multiselect("Chi schieri? (Max 11)", nomi)
 
-# --- CALCOLO ---
-st.divider()
-st.subheader("Chi gioca titolare?")
-
-if st.session_state.rosa:
-    nomi_rosa = sorted([p['nome'] for p in st.session_state.rosa])
-    scelte = st.multiselect("Seleziona i giocatori (Max 11):", nomi_rosa)
-
-    if st.button("🚀 Verifica Moduli", type="primary"):
-        if not scelte: st.warning("Seleziona qualcuno.")
-        elif len(scelte) > 11: st.error("Max 11 giocatori.")
+    if st.button("🚀 Verifica", type="primary"):
+        if not scelte: st.warning("Seleziona qualcuno")
+        elif len(scelte) > 11: st.error("Max 11 giocatori")
         else:
             target = [p for p in st.session_state.rosa if p['nome'] in scelte]
             validi = []
-            
-            for nome, slot in SCHEMI_MANTRA.items():
-                if verifica_formazione(target, nome, slot.copy()):
-                    validi.append(nome)
+            for n, s in SCHEMI_MANTRA.items():
+                if verifica_formazione(target, n, s.copy()): validi.append(n)
             
             if validi:
-                st.success(f"Trovati {len(validi)} moduli!")
-                cols = st.columns(3)
-                for i, m in enumerate(validi):
-                    with cols[i%3]: st.markdown(f"#### 🛡️ {m}")
+                st.success(f"Trovati {len(validi)} moduli:")
+                for m in validi: st.write(f"🛡️ **{m}**")
             else:
-                st.error("Nessun modulo compatibile.")
-                # Check errori comuni
-                n_b_only = sum(1 for p in target if 'B' in p['ruoli'] and 'Dc' not in p['ruoli'])
-                if n_b_only > 1: st.write("⚠️ Hai messo troppi 'B' puri (Max 1 nelle difese a 3).")
+                st.error("❌ Nessuna formazione valida.")
+                for msg in analizza_problemi(target): st.write(msg)
